@@ -9,6 +9,19 @@ def load(p): return json.loads(Path(p).read_text())
 def save(p,v): p=Path(p); p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps(v,indent=2,sort_keys=True)+'\n')
 def lock():
  p=ROOT/'.state/sources.lock.json'; return load(p) if p.exists() else {}
+def actual_revisions():
+ # Record the revision actually checked out for each configured source. The
+ # sync lock records what `sync` last checked out, which is stale when a
+ # corpus is pinned manually to reproduce a retained checkpoint; results must
+ # carry the revision the extraction truly used.
+ state={}; spec=load(ROOT/'config/sources.json')
+ for name,s in spec.items():
+  dst=ROOT/s['path']; old=lock().get(name,{})
+  if (dst/'.git').exists():
+   try: rev=subprocess.check_output(['git','rev-parse','HEAD'],cwd=dst,text=True).strip()
+   except Exception: rev=old.get('revision','')
+   state[name]={'url':s.get('url',old.get('url','')),'revision':rev,'synced_at':old.get('synced_at',now())}
+ return state
 def sync():
  spec=load(ROOT/'config/sources.json')['wpt']; dst=ROOT/spec['path']; dst.parent.mkdir(parents=True,exist_ok=True)
  if dst.exists(): subprocess.run(['git','fetch','--prune','origin',spec['branch']],cwd=dst,check=True); subprocess.run(['git','checkout','--detach','FETCH_HEAD'],cwd=dst,check=True)
@@ -112,7 +125,7 @@ def execute(cases_path,exe,result):
   row={k:c[k] for k in ('id','suite','source','index')}; row['status']=status
   if status!='pass': row.update(input=c['html'],output=outputs.get(c['id']),evidence=evidence)
   rows.append(row)
- payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':lock(),'minifier':{'path':str(exe)},'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
+ payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'minifier':{'path':str(exe)},'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
  return 1 if any(counts.get(x) for x in ('minify-error','parser-rejected','dom-difference')) else 0
 def dashboard(result):
  data=load(result); cards=''.join(f'<li><strong>{html.escape(k)}</strong><span>{v}</span></li>' for k,v in sorted(data['counts'].items())); bad=[r for r in data['results'] if r['status']!='pass'][:200]
