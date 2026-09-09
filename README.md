@@ -9,6 +9,15 @@ make sync extract html
 make dashboard
 ```
 
-Use `extract-html --limit 1000` while iterating. Results are retained as `results/latest.json` and timestamped history. Statuses are `pass`, `dom-difference`, `parser-rejected`, `source-rejected`, and `minify-error`. The first adapter excludes fragment tests because they require a contextual fragment parser. Confirmed product defects belong in Minify++'s permanent regression suite.
+Use `extract-html --limit 1000` while iterating. Results are retained as `results/latest.json` and timestamped history. Statuses are `pass`, `dom-difference`, `parser-rejected`, `source-rejected`, and `minify-error`. Support/resource paths and unresolved WPT server/generator templates are explicitly excluded and counted during extraction. Confirmed product defects belong in Minify++'s permanent regression suite.
 
 The Nift dashboard is built from a completed snapshot; it is not live while tests run.
+
+## Retained complete checkpoint
+
+At WPT revision `aed18189e54793ee12286eb96509e87df27f52dd`, the complete
+adapter selected 9,651 documents and all 9,651 preserved the canonical semantic
+DOM after Minify++. Extraction separately counted 588 support/template-path
+files, 240 unresolved server/generator templates and 28 non-UTF-8 inputs. The
+campaign found multiple real HTML scanner defects; each was fixed in Minify++
+and reduced into its product smoke suite before the final rerun.

@@ -32,15 +32,19 @@ def dat_cases(path):
  if cur: tests.append(cur)
  return tests
 def extract(source,out,limit):
- rows=[]
+ rows=[]; skipped={}
  for p in sorted((source/'html').rglob('*.html')):
-  if any(part in {'resources','support'} for part in p.parts): continue
+  if any(part in {'resources','support','templates'} for part in p.parts):
+   skipped['support-or-template-path']=skipped.get('support-or-template-path',0)+1; continue
   try: text=p.read_text(encoding='utf-8')
-  except UnicodeDecodeError: continue
+  except UnicodeDecodeError:
+   skipped['non-utf8']=skipped.get('non-utf8',0)+1; continue
+  if '{{' in text or '{%' in text or '{#' in text:
+   skipped['unresolved-server-template']=skipped.get('unresolved-server-template',0)+1; continue
   rel=p.relative_to(source).as_posix(); ident=hashlib.sha256(f'{rel}\0{text}'.encode()).hexdigest()[:16]
   rows.append({'id':ident,'suite':'wpt-html-parse','source':rel,'index':0,'html':text})
   if limit and len(rows)>=limit: break
- out.parent.mkdir(parents=True,exist_ok=True); out.write_text(''.join(json.dumps(r,sort_keys=True)+'\n' for r in rows)); print(f'extracted {len(rows)} cases')
+ out.parent.mkdir(parents=True,exist_ok=True); out.write_text(''.join(json.dumps(r,sort_keys=True)+'\n' for r in rows)); save(out.with_suffix('.summary.json'),{'eligible':len(rows),'skipped':skipped}); print(json.dumps({'eligible':len(rows),'skipped':skipped},sort_keys=True))
 def binary(value):
  p=Path(value).expanduser()
  if p.exists(): return p.resolve()
@@ -50,14 +54,21 @@ def binary(value):
 def minify(cases,exe):
  outputs={}; errors={}
  with tempfile.TemporaryDirectory() as td:
-  paths=[]
+  entries=[]
   for i,c in enumerate(cases):
-   p=Path(td)/f'case-{i:06d}.html'; p.write_text(c['html']); paths.append(p)
-  cp=subprocess.run([str(exe),*map(str,paths)],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-  for c,p in zip(cases,paths):
-   out=p.with_name(p.stem+'.min.html')
-   if out.exists(): outputs[c['id']]=out.read_text()
-   else: errors[c['id']]=(cp.stderr or cp.stdout or 'no output produced')[-2000:]
+   p=Path(td)/f'case-{i:06d}.html'; p.write_text(c['html']); entries.append((c,p))
+  def group(items):
+   cp=subprocess.run([str(exe),*[str(p) for _,p in items]],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+   produced=[(c,p,p.with_name(p.stem+'.min.html')) for c,p in items]
+   if cp.returncode==0 and all(out.exists() for _,_,out in produced):
+    for c,_,out in produced: outputs[c['id']]=out.read_text()
+   elif len(items)>1:
+    mid=len(items)//2; group(items[:mid]); group(items[mid:])
+   else:
+    c,_,out=produced[0]
+    if out.exists(): outputs[c['id']]=out.read_text()
+    else: errors[c['id']]=(cp.stderr or cp.stdout or 'no output produced')[-2000:]
+  for start in range(0,len(entries),500): group(entries[start:start+500])
  return outputs,errors
 def canonical(text):
  try:
@@ -69,11 +80,21 @@ def canonical(text):
    children=[]
    nodes=list(n)
    block={'body','p','div','section','article','aside','header','footer','main','nav','li','dt','dd','h1','h2','h3','h4','h5','h6'}
-   if n.text and (preserve or n.text.strip()): children.append(['text',n.text if preserve else (re.sub(r'\s+',' ',n.text).strip() if local=='body' or (not nodes and local in block) else re.sub(r'\s+',' ',n.text))])
+   def add_text(value):
+    if not value: return
+    if children and children[-1][0]=='text': children[-1][1]+=value
+    else: children.append(['text',value])
+   if n.text: add_text(n.text)
    for pos,c in enumerate(nodes):
     item=walk(c,preserve)
     if item is not None: children.append(item)
-    if c.tail and (preserve or c.tail.strip()): children.append(['text',c.tail if preserve else (re.sub(r'\s+',' ',c.tail).rstrip() if local=='body' and pos==len(nodes)-1 else re.sub(r'\s+',' ',c.tail))])
+    if c.tail: add_text(c.tail)
+   if not preserve:
+    for child in children:
+     if child[0]=='text': child[1]=re.sub(r'\s+',' ',child[1])
+    children=[child for child in children if child[0]!='text' or child[1].strip()]
+    if children and children[0][0]=='text' and (local=='body' or (len(children)==1 and local in block)): children[0][1]=children[0][1].lstrip()
+    if children and children[-1][0]=='text' and (local=='body' or (len(children)==1 and local in block)): children[-1][1]=children[-1][1].rstrip()
    return ['element',str(n.tag),sorted((str(k),v) for k,v in n.attrib.items()),children]
   return {'ok':True,'tree':walk(root)}
  except Exception as e: return {'ok':False,'error':str(e)}
