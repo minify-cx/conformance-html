@@ -2,15 +2,21 @@
   "counts": {
     "pass": 9651
   },
-  "duration_seconds": 7.52,
+  "duration_seconds": 7.208,
   "format": "html",
-  "generated_at": "2026-09-10T00:32:07Z",
+  "generated_at": "2026-09-10T01:00:46Z",
   "minifier": {
     "path": "/home/nick/Repositories/nift/minify/minify/minify"
   },
   "parser": {
     "name": "html5lib",
     "version": "1.1"
+  },
+  "references": {
+    "html5lib-tests": {
+      "revision": "224991ec10db04f056a89eed8b0bd8695fd2950e",
+      "url": "https://github.com/html5lib/html5lib-tests.git"
+    }
   },
   "results": [
     {
@@ -67573,14 +67579,9 @@
   ],
   "schema_version": 1,
   "source_revisions": {
-    "html5lib-tests": {
-      "revision": "224991ec10db04f056a89eed8b0bd8695fd2950e",
-      "synced_at": "2026-09-10T00:32:07Z",
-      "url": "https://github.com/html5lib/html5lib-tests.git"
-    },
     "wpt": {
       "revision": "aed18189e54793ee12286eb96509e87df27f52dd",
-      "synced_at": "2026-09-10T00:26:07Z",
+      "synced_at": "2026-09-10T00:58:44Z",
       "url": "https://github.com/web-platform-tests/wpt.git"
     }
   },
