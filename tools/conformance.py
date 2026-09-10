@@ -13,14 +13,17 @@ def actual_revisions():
  # Record the revision actually checked out for each configured source. The
  # sync lock records what `sync` last checked out, which is stale when a
  # corpus is pinned manually to reproduce a retained checkpoint; results must
- # carry the revision the extraction truly used.
+ # carry the revision the extraction truly used. A configured source without a
+ # local checkout (for example the html5lib-tests provenance pin) reports its
+ # pinned revision rather than nothing.
  state={}; spec=load(ROOT/'config/sources.json')
  for name,s in spec.items():
   dst=ROOT/s['path']; old=lock().get(name,{})
+  rev=old.get('revision','') or s.get('revision','')
   if (dst/'.git').exists():
    try: rev=subprocess.check_output(['git','rev-parse','HEAD'],cwd=dst,text=True).strip()
-   except Exception: rev=old.get('revision','')
-   state[name]={'url':s.get('url',old.get('url','')),'revision':rev,'synced_at':old.get('synced_at',now())}
+   except Exception: pass
+  state[name]={'url':s.get('url',old.get('url','')),'revision':rev,'synced_at':old.get('synced_at',now())}
  return state
 def sync():
  spec=load(ROOT/'config/sources.json')['wpt']; dst=ROOT/spec['path']; dst.parent.mkdir(parents=True,exist_ok=True)
@@ -83,6 +86,16 @@ def minify(cases,exe):
     else: errors[c['id']]=(cp.stderr or cp.stdout or 'no output produced')[-2000:]
   for start in range(0,len(entries),500): group(entries[start:start+500])
  return outputs,errors
+def parser_identity():
+ # Comparison is performed by the installed Python html5lib package, not by
+ # the html5lib-tests repository. Record the installed parser version so the
+ # provenance of every canonical projection is explicit.
+ try:
+  import html5lib
+  version=getattr(html5lib,'__version__','unknown')
+ except Exception:
+  version='unavailable'
+ return {'name':'html5lib','version':version}
 def canonical(text):
  try:
   import html5lib
@@ -117,7 +130,30 @@ def classify(source,output,error):
  if not before['ok']: return 'source-rejected',{'before':before}
  if not after['ok']: return 'parser-rejected',{'after':after}
  if before['tree']!=after['tree']: return 'dom-difference',{'before':before,'after':after}
+ if not preserves_conditional_comments(source,output):
+  # Conditional comments (`<!--[if`, `<!--#`, `<!--!`) are deliberately
+  # preserved by Minify++ because they carry runtime meaning, but the DOM
+  # canonicalizer drops comment nodes entirely. This auxiliary assertion
+  # closes that blind spot. Ordinary comments remain outside semantic
+  # comparison per the documented normalization policy.
+  return 'dom-difference',{'reason':'conditional-comment-loss','before':before,'after':after}
  return 'pass',{}
+def preserves_conditional_comments(before,after):
+ # Every conditional/SSI/license comment in the source must appear unchanged
+ # in the output. These marker families match the Minify++ html() preserve
+ # policy: `<!--[if`, `<!--#` and `<!--!`.
+ if '<!--' not in before: return True
+ i=0
+ while True:
+  start=before.find('<!--',i)
+  if start<0: return True
+  end=before.find('-->',start+4)
+  if end<0: break
+  comment=before[start:end+3]
+  if comment.startswith('<!--[if') or comment.startswith('<!--#') or comment.startswith('<!--!'):
+   if comment not in after: return False
+  i=end+3
+ return True
 def execute(cases_path,exe,result):
  cases=[json.loads(x) for x in cases_path.read_text().splitlines() if x.strip()]; started=time.time(); outputs,errors=minify(cases,exe); rows=[]; counts={}
  for c in cases:
@@ -125,12 +161,13 @@ def execute(cases_path,exe,result):
   row={k:c[k] for k in ('id','suite','source','index')}; row['status']=status
   if status!='pass': row.update(input=c['html'],output=outputs.get(c['id']),evidence=evidence)
   rows.append(row)
- payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'minifier':{'path':str(exe)},'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
+ payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'parser':parser_identity(),'minifier':{'path':str(exe)},'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
  return 1 if any(counts.get(x) for x in ('minify-error','parser-rejected','dom-difference')) else 0
 def dashboard(result):
  data=load(result); cards=''.join(f'<li><strong>{html.escape(k)}</strong><span>{v}</span></li>' for k,v in sorted(data['counts'].items())); bad=[r for r in data['results'] if r['status']!='pass'][:200]
  rows=''.join(f"<tr><td>{html.escape(r['status'])}</td><td>{html.escape(r['source'])}</td><td><code>{r['id']}</code></td></tr>" for r in bad) or '<tr><td colspan="3">No non-pass cases.</td></tr>'
- g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul><section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
+ parser=data.get('parser',{}); parser_text=f"<p>Canonicalization parser: {html.escape(str(parser.get('name','html5lib')))} {html.escape(str(parser.get('version','unknown')))} (installed package).</p>" if parser else ''
+ g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul>{parser_text}<section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
  shutil.copy2(result,ROOT/'public/results/latest.json'); subprocess.run(['nift','build','--all'],cwd=ROOT,check=True)
 def main():
  p=argparse.ArgumentParser(); s=p.add_subparsers(dest='cmd',required=True); s.add_parser('sync')

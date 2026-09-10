@@ -1,1 +1,2 @@
-{"wpt":{"url":"https://github.com/web-platform-tests/wpt.git","branch":"master","path":".state/upstreams/wpt"}}
+{"wpt":{"url":"https://github.com/web-platform-tests/wpt.git","branch":"master","path":".state/upstreams/wpt"},
+ "html5lib-tests":{"url":"https://github.com/html5lib/html5lib-tests.git","branch":"main","path":".state/upstreams/html5lib-tests","revision":"224991ec10db04f056a89eed8b0bd8695fd2950e"}}
