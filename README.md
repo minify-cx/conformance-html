@@ -2,7 +2,13 @@
 
 Independent HTML conformance evidence for Minify++. The harness pins Web Platform Tests, extracts standalone HTML documents under WPT's HTML tree, minifies them in batches, parses original and output with the installed Python `html5lib` package, and compares canonical DOM trees. Upstream tests are acquired on demand and are not vendored.
 
-**Provenance:** WPT supplies the extracted cases; canonicalization and DOM comparison are performed by the installed `html5lib` package (a Python dependency, pinned in CI as `html5lib==1.1`), not by the `html5lib-tests` repository. Every result records the exact WPT checkout revision, the `html5lib-tests` revision when configured, and the installed parser name/version in the `parser` field, so the projection source and the comparison implementation are both explicit.
+**Provenance:** WPT supplies the extracted cases; canonicalization and DOM comparison are performed by the installed `html5lib` package (a Python dependency, pinned in CI as `html5lib==1.1`), not by the `html5lib-tests` repository. Every result records:
+
+* `source_revisions` — sources that were actually checked out and used for extraction (currently the exact WPT checkout revision, with its sync time);
+* `references` — configured but never-acquired provenance pins (the `html5lib-tests` commit) that supply neither cases nor the parser; they carry no `synced_at` and are labelled "configured reference, not synchronized" in the dashboard;
+* `parser` — the installed `html5lib` name and version that performed canonicalization.
+
+This keeps the projection source, the comparison implementation, and any purely-referential upstream commit structurally unambiguous.
 
 ```sh
 python3 -m pip install html5lib

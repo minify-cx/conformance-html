@@ -10,21 +10,31 @@ def save(p,v): p=Path(p); p.parent.mkdir(parents=True,exist_ok=True); p.write_te
 def lock():
  p=ROOT/'.state/sources.lock.json'; return load(p) if p.exists() else {}
 def actual_revisions():
- # Record the revision actually checked out for each configured source. The
- # sync lock records what `sync` last checked out, which is stale when a
- # corpus is pinned manually to reproduce a retained checkpoint; results must
- # carry the revision the extraction truly used. A configured source without a
- # local checkout (for example the html5lib-tests provenance pin) reports its
- # pinned revision rather than nothing.
+ # Record only sources that were actually checked out and used for
+ # extraction. The sync lock records what `sync` last checked out, which is
+ # stale when a corpus is pinned manually to reproduce a retained checkpoint;
+ # results must carry the revision the extraction truly used. A configured
+ # source that was never acquired (for example the html5lib-tests reference
+ # pin) is reported separately by configured_references() and is never shown
+ # as synchronized.
  state={}; spec=load(ROOT/'config/sources.json')
  for name,s in spec.items():
   dst=ROOT/s['path']; old=lock().get(name,{})
-  rev=old.get('revision','') or s.get('revision','')
   if (dst/'.git').exists():
    try: rev=subprocess.check_output(['git','rev-parse','HEAD'],cwd=dst,text=True).strip()
-   except Exception: pass
-  state[name]={'url':s.get('url',old.get('url','')),'revision':rev,'synced_at':old.get('synced_at',now())}
+   except Exception: rev=old.get('revision','')
+   state[name]={'url':s.get('url',old.get('url','')),'revision':rev,'synced_at':old.get('synced_at',now())}
  return state
+def configured_references():
+ # Configured but never-acquired provenance pins. These do not supply cases
+ # and are not synchronized; they carry no synced_at so the result cannot be
+ # mistaken for a checkout that participated in the run.
+ refs={}; spec=load(ROOT/'config/sources.json')
+ for name,s in spec.items():
+  dst=ROOT/s['path']
+  if not (dst/'.git').exists() and s.get('revision'):
+   refs[name]={'url':s.get('url',''),'revision':s['revision']}
+ return refs
 def sync():
  spec=load(ROOT/'config/sources.json')['wpt']; dst=ROOT/spec['path']; dst.parent.mkdir(parents=True,exist_ok=True)
  if dst.exists(): subprocess.run(['git','fetch','--prune','origin',spec['branch']],cwd=dst,check=True); subprocess.run(['git','checkout','--detach','FETCH_HEAD'],cwd=dst,check=True)
@@ -138,22 +148,26 @@ def classify(source,output,error):
   # comparison per the documented normalization policy.
   return 'dom-difference',{'reason':'conditional-comment-loss','before':before,'after':after}
  return 'pass',{}
-def preserves_conditional_comments(before,after):
- # Every conditional/SSI/license comment in the source must appear unchanged
- # in the output. These marker families match the Minify++ html() preserve
- # policy: `<!--[if`, `<!--#` and `<!--!`.
- if '<!--' not in before: return True
- i=0
+def preserved_comment_sequence(text):
+ # Ordered list of preserved conditional/SSI/license comments. These marker
+ # families match the Minify++ html() preserve policy: `<!--[if`, `<!--#`
+ # and `<!--!`.
+ seq=[]; i=0
  while True:
-  start=before.find('<!--',i)
-  if start<0: return True
-  end=before.find('-->',start+4)
+  start=text.find('<!--',i)
+  if start<0: break
+  end=text.find('-->',start+4)
   if end<0: break
-  comment=before[start:end+3]
+  comment=text[start:end+3]
   if comment.startswith('<!--[if') or comment.startswith('<!--#') or comment.startswith('<!--!'):
-   if comment not in after: return False
+   seq.append(comment)
   i=end+3
- return True
+ return seq
+def preserves_conditional_comments(before,after):
+ # Compare the ordered preserved-comment sequences exactly so removal,
+ # alteration, duplicate loss, insertion and reordering are all detected,
+ # not just "the string appears somewhere".
+ return preserved_comment_sequence(before)==preserved_comment_sequence(after)
 def execute(cases_path,exe,result):
  cases=[json.loads(x) for x in cases_path.read_text().splitlines() if x.strip()]; started=time.time(); outputs,errors=minify(cases,exe); rows=[]; counts={}
  for c in cases:
@@ -161,13 +175,17 @@ def execute(cases_path,exe,result):
   row={k:c[k] for k in ('id','suite','source','index')}; row['status']=status
   if status!='pass': row.update(input=c['html'],output=outputs.get(c['id']),evidence=evidence)
   rows.append(row)
- payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'parser':parser_identity(),'minifier':{'path':str(exe)},'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
+ payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'references':configured_references(),'parser':parser_identity(),'minifier':{'path':str(exe)},'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
  return 1 if any(counts.get(x) for x in ('minify-error','parser-rejected','dom-difference')) else 0
 def dashboard(result):
  data=load(result); cards=''.join(f'<li><strong>{html.escape(k)}</strong><span>{v}</span></li>' for k,v in sorted(data['counts'].items())); bad=[r for r in data['results'] if r['status']!='pass'][:200]
  rows=''.join(f"<tr><td>{html.escape(r['status'])}</td><td>{html.escape(r['source'])}</td><td><code>{r['id']}</code></td></tr>" for r in bad) or '<tr><td colspan="3">No non-pass cases.</td></tr>'
  parser=data.get('parser',{}); parser_text=f"<p>Canonicalization parser: {html.escape(str(parser.get('name','html5lib')))} {html.escape(str(parser.get('version','unknown')))} (installed package).</p>" if parser else ''
- g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul>{parser_text}<section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
+ refs=data.get('references',{}); ref_text=''
+ if refs:
+  items=''.join(f"<li><strong>{html.escape(k)}</strong> <code>{html.escape(v.get('revision',''))[:12]}</code> (configured reference, not synchronized)</li>" for k,v in sorted(refs.items()))
+  ref_text=f'<ul class="references">{items}</ul>'
+ g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul>{parser_text}{ref_text}<section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
  shutil.copy2(result,ROOT/'public/results/latest.json'); subprocess.run(['nift','build','--all'],cwd=ROOT,check=True)
 def main():
  p=argparse.ArgumentParser(); s=p.add_subparsers(dest='cmd',required=True); s.add_parser('sync')
