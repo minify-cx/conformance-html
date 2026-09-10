@@ -56,7 +56,7 @@ class IdentityTests(unittest.TestCase):
     def test_dashboard_identity_propagation(self):
         import json, tempfile
         base = {"counts": {"pass": 1}, "source_revisions": {},
-                "minifier": {"name": "Minify++", "version": "1.1.2", "commit": "x"*40},
+                "minifier": {"name": "Minify++", "version": "1.1.2", "version_string": "Minify++ 1.1.2", "commit": "a"*40},
                 "oracle": {"name": "o", "version": "1"}, "generated_at": "2026-01-01T00:00:00Z"}
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
@@ -64,7 +64,7 @@ class IdentityTests(unittest.TestCase):
             (td/"pub.json").write_text(json.dumps(base))
             (td/"index.html").write_text("<h1>ok</h1>")
             h.verify_dashboard(td/"res.json", td/"index.html", td/"pub.json")
-            bad = dict(base); bad["minifier"] = {"name": "Minify++", "version": "1.1.1", "commit": "y"*40}
+            bad = dict(base); bad["minifier"] = {"name": "Minify++", "version": "1.1.1", "commit": "b"*40}
             (td/"pub.json").write_text(json.dumps(bad))
             with self.assertRaises(SystemExit):
                 h.verify_dashboard(td/"res.json", td/"index.html", td/"pub.json")
@@ -85,5 +85,32 @@ class IdentityTests(unittest.TestCase):
             self.assertEqual(ident["name"], "Minify++")
             self.assertEqual(ident["version"], "1.1.2")
             self.assertTrue(ident["commit"])
+
+
+
+def test_validate_identity_rejects_incomplete(self):
+    import copy
+    base = {"minifier": {"name": "Minify++", "version": "1.1.2", "version_string": "Minify++ 1.1.2", "commit": "a"*40},
+            "oracle": {"name": "o", "version": "1"}}
+    with self.assertRaises(SystemExit): h.validate_identity({"oracle": base["oracle"]})
+    with self.assertRaises(SystemExit): h.validate_identity({"minifier": {}, "oracle": base["oracle"]})
+    bad = copy.deepcopy(base); bad["minifier"]["version_string"] = ""
+    with self.assertRaises(SystemExit): h.validate_identity(bad)
+    bad = copy.deepcopy(base); bad["minifier"]["commit"] = "zz"
+    with self.assertRaises(SystemExit): h.validate_identity(bad)
+    bad = copy.deepcopy(base); bad["oracle"] = {"name": "x"}
+    with self.assertRaises(SystemExit): h.validate_identity(bad)
+    with self.assertRaises(SystemExit): h.validate_identity(base, expected_commit="f"*40)
+
+def test_dashboard_rejects_matching_empty_identity(self):
+    import tempfile
+    empty = {"counts": {"pass": 1}, "source_revisions": {}, "minifier": {}, "oracle": {}, "generated_at": "2026-01-01T00:00:00Z"}
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        (td/"res.json").write_text(json.dumps(empty))
+        (td/"pub.json").write_text(json.dumps(empty))
+        (td/"index.html").write_text("<h1>ok</h1>")
+        with self.assertRaises(SystemExit):
+            h.verify_dashboard(td/"res.json", td/"index.html", td/"pub.json")
 
 if __name__=='__main__': unittest.main()

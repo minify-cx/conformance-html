@@ -190,9 +190,10 @@ def execute(cases_path,exe,result):
   row={k:c[k] for k in ('id','suite','source','index')}; row['status']=status
   if status!='pass': row.update(input=c['html'],output=outputs.get(c['id']),evidence=evidence)
   rows.append(row)
- payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'references':configured_references(),'parser':parser_identity(),'minifier':minifier_identity(exe),'oracle':parser_identity(),'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
+ payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'references':configured_references(),'parser':parser_identity(),'minifier':minifier_identity(exe),'oracle':parser_identity(),'total':len(rows),'counts':counts,'results':rows}; validate_identity(payload)
+ save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
  return 1 if any(counts.get(x) for x in ('minify-error','parser-rejected','dom-difference')) else 0
-def dashboard(result):
+def dashboard(result, expected_commit=None):
  data=load(result); cards=''.join(f'<li><strong>{html.escape(k)}</strong><span>{v}</span></li>' for k,v in sorted(data['counts'].items())); bad=[r for r in data['results'] if r['status']!='pass'][:200]
  rows=''.join(f"<tr><td>{html.escape(r['status'])}</td><td>{html.escape(r['source'])}</td><td><code>{r['id']}</code></td></tr>" for r in bad) or '<tr><td colspan="3">No non-pass cases.</td></tr>'
  parser=data.get('parser',{}); parser_text=f"<p>Canonicalization parser: {html.escape(str(parser.get('name','html5lib')))} {html.escape(str(parser.get('version','unknown')))} (installed package).</p>" if parser else ''
@@ -212,13 +213,31 @@ def dashboard(result):
 
  g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul>{parser_text}{ref_text}{provenance_text}<section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
  shutil.copy(result,ROOT/'public/results/latest.json'); subprocess.run(['nift','build','--all'],cwd=ROOT,check=True)
- verify_dashboard(result,ROOT/'public/index.html',ROOT/'public/results/latest.json')
-def verify_dashboard(result_path,index_path,published_path):
+ verify_dashboard(result,ROOT/'public/index.html',ROOT/'public/results/latest.json',expected_commit)
+
+def validate_identity(payload, expected_commit=None):
+ m=payload.get('minifier'); o=payload.get('oracle')
+ if not isinstance(m,dict) or not m: raise SystemExit('identity validation failed: minifier identity missing or empty')
+ if m.get('name')=='Minify++':
+  if not re.match(r'^\d+\.\d+\.\d+$',str(m.get('version') or '')): raise SystemExit('identity validation failed: minifier semantic version missing/malformed')
+  if not m.get('version_string'): raise SystemExit('identity validation failed: minifier version_string empty')
+  c=str(m.get('commit') or '')
+  if not re.match(r'^[0-9a-f]{40}$',c): raise SystemExit('identity validation failed: minifier commit missing/malformed')
+  if expected_commit and c!=expected_commit: raise SystemExit('identity validation failed: minifier commit %s != expected %s'%(c,expected_commit))
+ else:
+  if not m.get('name') or not m.get('version'): raise SystemExit('identity validation failed: minifier name/version missing')
+ if not isinstance(o,dict) or not o: raise SystemExit('identity validation failed: oracle identity missing or empty')
+ for k in ("name","version"):
+  if not o.get(k): raise SystemExit('identity validation failed: oracle field %s empty'%k)
+
+def verify_dashboard(result_path,index_path,published_path,expected_commit=None):
  # Prove the freshly built dashboard reflects exactly this completed run: the
- # published JSON must carry the same counts, source revisions, parser and
- # generation timestamp, and the rendered page must contain no unresolved
- # Nift directives.
+ # published JSON must carry the same counts, source revisions, parser,
+ # complete non-empty identity and generation timestamp, and the rendered page
+ # must contain no unresolved Nift directives.
  data=load(result_path); pub=load(published_path)
+ validate_identity(data,expected_commit)
+ validate_identity(pub,expected_commit)
  for key in ('counts','source_revisions','parser','minifier','oracle','generated_at'):
   if pub.get(key)!=data.get(key):
    raise SystemExit(f"dashboard mismatch: {key} differs between result and published copy")
@@ -232,10 +251,10 @@ def main():
  for name in ('run-html','smoke'):
   q=s.add_parser(name); q.add_argument('--minify-bin',default='../minify/minify'); q.add_argument('--results',type=Path,default=RESULTS); q.add_argument('--dashboard',action='store_true')
   if name=='run-html': q.add_argument('--cases',type=Path,default=ROOT/'work/wpt-html.jsonl')
- d=s.add_parser('dashboard'); d.add_argument('--results',type=Path,default=RESULTS); a=p.parse_args()
+ d=s.add_parser('dashboard'); d.add_argument('--results',type=Path,default=RESULTS); d.add_argument('--require-minifier-commit'); a=p.parse_args()
  if a.cmd=='sync': sync(); return 0
  if a.cmd=='extract-html': extract(a.source,a.output,a.limit); return 0
- if a.cmd=='dashboard': dashboard(a.results); return 0
+ if a.cmd=='dashboard': dashboard(a.results, a.require_minifier_commit); return 0
  exe=binary(a.minify_bin)
  if a.cmd=='smoke':
   cases=[{'id':'basic','suite':'smoke','source':'basic','index':0,'html':'<!doctype html>\n<html><head><title>x</title></head><body><p>Hello <b>world</b></p></body></html>'},{'id':'raw','suite':'smoke','source':'raw','index':0,'html':'<!doctype html><script>const x = "</script-not>";</script><pre> a  b </pre>'}]; path=ROOT/'work/smoke-html.jsonl'; path.parent.mkdir(exist_ok=True); path.write_text(''.join(json.dumps(x)+'\n' for x in cases))
