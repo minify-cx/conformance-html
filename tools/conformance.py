@@ -96,6 +96,21 @@ def minify(cases,exe):
     else: errors[c['id']]=(cp.stderr or cp.stdout or 'no output produced')[-2000:]
   for start in range(0,len(entries),500): group(entries[start:start+500])
  return outputs,errors
+
+def minifier_identity(exe):
+ # Structured, self-identifying minifier metadata: product name, semantic
+ # version, exact git commit (from the checkout that produced the binary) and
+ # the raw --version string.
+ probe=subprocess.run([str(exe),'--version'],capture_output=True,text=True)
+ text=(probe.stdout or probe.stderr or '').strip()
+ m=re.search(r'(\d+\.\d+\.\d+)',text)
+ commit=None
+ parent=Path(exe).resolve().parent
+ if (parent/'.git').exists():
+  r=subprocess.run(['git','-C',str(parent),'rev-parse','HEAD'],capture_output=True,text=True)
+  if r.returncode==0: commit=r.stdout.strip()
+ return {'name':'Minify++','version':m.group(1) if m else text,'version_string':text,'commit':commit,'path':str(exe)}
+
 def parser_identity():
  # Comparison is performed by the installed Python html5lib package, not by
  # the html5lib-tests repository. Record the installed parser version so the
@@ -175,7 +190,7 @@ def execute(cases_path,exe,result):
   row={k:c[k] for k in ('id','suite','source','index')}; row['status']=status
   if status!='pass': row.update(input=c['html'],output=outputs.get(c['id']),evidence=evidence)
   rows.append(row)
- payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'references':configured_references(),'parser':parser_identity(),'minifier':{'path':str(exe)},'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
+ payload={'schema_version':1,'format':'html','generated_at':now(),'duration_seconds':round(time.time()-started,3),'source_revisions':actual_revisions(),'references':configured_references(),'parser':parser_identity(),'minifier':minifier_identity(exe),'oracle':parser_identity(),'total':len(rows),'counts':counts,'results':rows}; save(result,payload); save(ROOT/'results/history'/f'{datetime.datetime.now(datetime.timezone.utc):%Y%m%dT%H%M%SZ}.json',payload); print(json.dumps(counts,sort_keys=True))
  return 1 if any(counts.get(x) for x in ('minify-error','parser-rejected','dom-difference')) else 0
 def dashboard(result):
  data=load(result); cards=''.join(f'<li><strong>{html.escape(k)}</strong><span>{v}</span></li>' for k,v in sorted(data['counts'].items())); bad=[r for r in data['results'] if r['status']!='pass'][:200]
@@ -185,7 +200,17 @@ def dashboard(result):
  if refs:
   items=''.join(f"<li><strong>{html.escape(k)}</strong> <code>{html.escape(v.get('revision',''))[:12]}</code> (configured reference, not synchronized)</li>" for k,v in sorted(refs.items()))
   ref_text=f'<ul class="references">{items}</ul>'
- g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul>{parser_text}{ref_text}<section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
+
+ def provenance_text(data):
+  min=data.get('minifier',{}); ora=data.get('oracle',{}); revs=data.get('source_revisions',{})
+  bits=[f"<strong>Minify++</strong> {html.escape(str(min.get('version','')))}{(' ('+html.escape(str(min.get('commit',''))) )[:9]+')' if min.get('commit') else ''}",
+        f"<strong>oracle</strong> {html.escape(str(ora.get('name','')))} {html.escape(str(ora.get('version','')))}"]
+  for k,v in revs.items():
+   bits.append(f"<strong>{html.escape(k)}</strong> <code>{html.escape(str(v.get('revision','')))[:12]}</code>")
+  return '<p class="provenance">' + ' &middot; '.join(bits) + '</p>'
+ provenance_text=provenance_text(data)
+
+ g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul>{parser_text}{ref_text}{provenance_text}<section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
  shutil.copy(result,ROOT/'public/results/latest.json'); subprocess.run(['nift','build','--all'],cwd=ROOT,check=True)
  verify_dashboard(result,ROOT/'public/index.html',ROOT/'public/results/latest.json')
 def verify_dashboard(result_path,index_path,published_path):
@@ -194,7 +219,7 @@ def verify_dashboard(result_path,index_path,published_path):
  # generation timestamp, and the rendered page must contain no unresolved
  # Nift directives.
  data=load(result_path); pub=load(published_path)
- for key in ('counts','source_revisions','parser','generated_at'):
+ for key in ('counts','source_revisions','parser','minifier','oracle','generated_at'):
   if pub.get(key)!=data.get(key):
    raise SystemExit(f"dashboard mismatch: {key} differs between result and published copy")
  text=Path(index_path).read_text()
