@@ -187,6 +187,20 @@ def dashboard(result):
   ref_text=f'<ul class="references">{items}</ul>'
  g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul>{parser_text}{ref_text}<section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
  shutil.copy2(result,ROOT/'public/results/latest.json'); subprocess.run(['nift','build','--all'],cwd=ROOT,check=True)
+ verify_dashboard(result,ROOT/'public/index.html',ROOT/'public/results/latest.json')
+def verify_dashboard(result_path,index_path,published_path):
+ # Prove the freshly built dashboard reflects exactly this completed run: the
+ # published JSON must carry the same counts, source revisions, parser and
+ # generation timestamp, and the rendered page must contain no unresolved
+ # Nift directives.
+ data=load(result_path); pub=load(published_path)
+ for key in ('counts','source_revisions','parser','generated_at'):
+  if pub.get(key)!=data.get(key):
+   raise SystemExit(f"dashboard mismatch: {key} differs between result and published copy")
+ text=Path(index_path).read_text()
+ for token in ('@path(','@pathto(','@input(','@content'):
+  if token in text: raise SystemExit(f"unresolved Nift directive in dashboard: {token}")
+ print("dashboard verified: published JSON matches run and page has no unresolved directives")
 def main():
  p=argparse.ArgumentParser(); s=p.add_subparsers(dest='cmd',required=True); s.add_parser('sync')
  e=s.add_parser('extract-html'); e.add_argument('--source',type=Path,default=ROOT/'.state/upstreams/wpt'); e.add_argument('--output',type=Path,default=ROOT/'work/wpt-html.jsonl'); e.add_argument('--limit',type=int)
