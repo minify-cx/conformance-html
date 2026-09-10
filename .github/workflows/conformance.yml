@@ -1,0 +1,38 @@
+name: HTML Conformance
+on:
+  workflow_dispatch:
+    inputs:
+      limit: {description: "Maximum cases (0 = all)", required: true, default: "0"}
+  schedule: [{cron: "23 3 * * 1"}]
+permissions: {contents: read}
+jobs:
+  html:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: stage}
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {repository: minify-cx/minify, path: minify-source}
+      - run: make
+        working-directory: minify-source
+      - run: python3 -m pip install html5lib==1.1
+      - run: make test && make sync
+      - shell: bash
+        run: |
+          limit='${{ inputs.limit }}'
+          if [[ -n "$limit" && "$limit" != 0 ]]; then python3 tools/conformance.py extract-html --limit "$limit"; else make extract; fi
+          python3 tools/conformance.py run-html --minify-bin "$GITHUB_WORKSPACE/minify-source/minify"
+      - name: Build static dashboard
+        shell: bash
+        run: |
+          curl -fsSL https://nift.dev/install | NIFT_VERSION=4.0.12 NIFT_INSTALL_DIR="$RUNNER_TEMP/nift-bin" sh
+          export PATH="$RUNNER_TEMP/nift-bin:$PATH"
+          python3 tools/conformance.py dashboard
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: html-conformance-results
+          path: |
+            results/
+            public/
