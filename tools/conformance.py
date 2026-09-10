@@ -186,7 +186,7 @@ def dashboard(result):
   items=''.join(f"<li><strong>{html.escape(k)}</strong> <code>{html.escape(v.get('revision',''))[:12]}</code> (configured reference, not synchronized)</li>" for k,v in sorted(refs.items()))
   ref_text=f'<ul class="references">{items}</ul>'
  g=ROOT/'generated/latest.html'; g.parent.mkdir(exist_ok=True); g.write_text(f'<section class="hero"><p class="eyebrow">HTML conformance</p><h1>Minify++ against html5lib</h1><p>{data["total"]} independent tree-construction cases. Generated {data["generated_at"]}.</p></section><ul class="stats">{cards}</ul>{parser_text}{ref_text}<section><h2>Non-pass evidence</h2><table><thead><tr><th>Status</th><th>Source</th><th>ID</th></tr></thead><tbody>{rows}</tbody></table></section>')
- shutil.copy2(result,ROOT/'public/results/latest.json'); subprocess.run(['nift','build','--all'],cwd=ROOT,check=True)
+ shutil.copy(result,ROOT/'public/results/latest.json'); subprocess.run(['nift','build','--all'],cwd=ROOT,check=True)
  verify_dashboard(result,ROOT/'public/index.html',ROOT/'public/results/latest.json')
 def verify_dashboard(result_path,index_path,published_path):
  # Prove the freshly built dashboard reflects exactly this completed run: the
